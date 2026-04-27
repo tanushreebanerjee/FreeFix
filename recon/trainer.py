@@ -24,6 +24,12 @@ from einops import reduce, repeat
 import imageio
 from imageio.v2 import imwrite
 
+# Patch FileBaton release before importing gsplat to avoid NFS lock races.
+try:
+    import truefix.patch_file_baton  # noqa: F401
+except Exception:
+    pass
+
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 import matplotlib.pyplot as plt
