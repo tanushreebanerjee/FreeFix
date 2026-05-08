@@ -15,7 +15,17 @@ from omegaconf import OmegaConf
 import argparse
 from recon.trainer import save_depth_map_visualization
 
-def refine(cfg):
+def build_masks(refiner, i, cfg, pipe, generator):
+    """Build confidence masks for frame i using FreeFix's Fisher-certainty path.
+
+    Returns (rgb, masks, alpha, depth, cam_param) where masks is a stacked tensor
+    (num_stages, H, W). Override by passing build_masks_fn to refine().
+    """
+    rgb, multi_certainties, alpha, depth, cam_param, _ = refiner.render(i)
+    return rgb, torch.stack(multi_certainties), alpha, depth, cam_param
+
+
+def refine(cfg, build_masks_fn=None, post_step_fn=None, no_refine=False, mask_scheduler=None):
     with open(os.path.join(cfg.base_dir, cfg.gs_cfg_file), "r") as f:
         config = Config(**json.load(f))
     refiner = Refiner(
@@ -40,15 +50,17 @@ def refine(cfg):
     os.makedirs(f'{output_dir}/refine/render', exist_ok=True)
     os.makedirs(f'{output_dir}/refine/gen', exist_ok=True)
     os.makedirs(f'{output_dir}/refine/depth', exist_ok=True)
-    for c_exp in cfg.c_exp_index:
-        os.makedirs(f'{output_dir}/refine/masks/{c_exp}', exist_ok=True)
+    if build_masks_fn is None:
+        for c_exp in cfg.c_exp_index:
+            os.makedirs(f'{output_dir}/refine/masks/{c_exp}', exist_ok=True)
     before_refine_writer = imageio.get_writer(f'{output_dir}/before_refine.mp4', fps=12)
     gen_writer = imageio.get_writer(f'{output_dir}/refine/gen.mp4', fps=12)
     after_refine_writer = imageio.get_writer(f'{output_dir}/after_refine.mp4', fps=12)
 
     generator = torch.manual_seed(64)
     infer_steps = int(cfg.num_inference_steps * cfg.strength)
-    mask_scheduler=[int(infer_steps * cfg.c_scheduler[i]) for i in range(len(cfg.c_scheduler))]
+    if mask_scheduler is None:
+        mask_scheduler=[int(infer_steps * cfg.c_scheduler[i]) for i in range(len(cfg.c_scheduler))]
 
     # render test images before refine
     for i in range(cfg.refine_start_idx, cfg.refine_end_idx):
@@ -61,18 +73,20 @@ def refine(cfg):
     train_cams = [refiner.train_dataset[j] for j in range(cfg.train_start_idx, cfg.train_end_idx)]
     train_prob = [1 for _ in range(cfg.train_start_idx, cfg.train_end_idx)]
     prev_refine_cams = []
+    _build = build_masks_fn or build_masks
     for i in range(cfg.refine_start_idx, cfg.refine_end_idx):
-        rgb, masks, alpha, depth, cam_param, _ = refiner.render(i)
-        masks = torch.stack(masks)
+        rgb, masks, alpha, depth, cam_param = _build(refiner, i, cfg, pipe, generator)
         rgb_to_refine = rgb.permute(2,0,1).to(pipe.device) # (3, H, W)
-        masks = masks.to(pipe.device)
+        if masks is not None:
+            masks = masks.to(pipe.device)
         H, W = rgb_to_refine.shape[1], rgb_to_refine.shape[2]
 
         save_image(rgb_to_refine, f'{output_dir}/refine/render/{i:03d}.jpg')
         save_depth_map_visualization(depth[..., 0].cpu().numpy(), f'{output_dir}/refine/depth/{i:03d}.jpg')
-        for j in range(masks.shape[0]):
-            save_image(masks[j:j+1][None, ...], f'{output_dir}/refine/masks/{cfg.c_exp_index[j]}/{i:03d}.jpg')
-        
+        if build_masks_fn is None and masks is not None:
+            for j in range(masks.shape[0]):
+                save_image(masks[j:j+1][None, ...], f'{output_dir}/refine/masks/{cfg.c_exp_index[j]}/{i:03d}.jpg')
+
         if i == cfg.refine_start_idx:
             warp_until = -1
             warp_mask = None
@@ -82,12 +96,9 @@ def refine(cfg):
             warp_mask = alpha
             refine_steps = cfg.refine_steps
 
-        refined_image = pipe(
-            cfg.prompt,
+        pipe_kwargs = dict(
             negative_prompt=cfg.negative_prompt if "negative_prompt" in cfg else None,
             image=rgb_to_refine,
-            mask=masks,
-            mask_scheduler=mask_scheduler,
             guide_until=infer_steps*cfg.guide_ratio,
             warp_image=rgb_to_refine,
             warp_until=warp_until,
@@ -98,7 +109,10 @@ def refine(cfg):
             num_inference_steps=cfg.num_inference_steps,
             generator=generator,
             strength=cfg.strength,
-        ).images[0]
+        )
+        if masks is not None:
+            pipe_kwargs.update(mask=masks, mask_scheduler=mask_scheduler)
+        refined_image = pipe(cfg.prompt, **pipe_kwargs).images[0]
 
         refined_image = refined_image.resize((W, H))
         torch_refined_image = torch.from_numpy(np.array(refined_image))
@@ -115,10 +129,14 @@ def refine(cfg):
         refined_image.save(f'{output_dir}/refine/gen/image_{i:03d}.jpg')
         gen_writer.append_data(np.array(refined_image))
 
-        refiner.refine(refine_cams, train_cams, train_prob, max_steps=refine_steps, use_affine=cfg.affine)
+        if post_step_fn is not None:
+            post_step_fn(i=i, rgb=rgb_to_refine, masks=masks, refined_image=refined_image,
+                         output_dir=output_dir, refiner=refiner)
 
-        train_cams.append(refine_cams[0])
-        train_prob.append(cfg.gen_prob)
+        if not no_refine:
+            refiner.refine(refine_cams, train_cams, train_prob, max_steps=refine_steps, use_affine=cfg.affine)
+            train_cams.append(refine_cams[0])
+            train_prob.append(cfg.gen_prob)
 
     gen_writer.close()
 
