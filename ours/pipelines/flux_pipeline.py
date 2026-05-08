@@ -189,7 +189,10 @@ class FluxPipeline(
 
     model_cpu_offload_seq = "text_encoder->text_encoder_2->image_encoder->transformer->vae"
     _optional_components = ["image_encoder", "feature_extractor"]
-    _callback_tensor_inputs = ["latents", "prompt_embeds"]
+    # Callback tensor inputs permitted in `callback_on_step_end_tensor_inputs`.
+    # We allow extra tensors for MaskNet training objectives (flowmatch / latent-space),
+    # which capture intermediate denoising tensors.
+    _callback_tensor_inputs = ["latents", "prompt_embeds", "x0", "noise_pred"]
 
     def __init__(
         self,

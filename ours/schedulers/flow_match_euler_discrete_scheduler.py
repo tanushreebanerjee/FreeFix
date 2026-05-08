@@ -594,11 +594,21 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
             warp_latent = warp_latent.to(dtype=x0.dtype)
         
         if guided and prior_latents is not None:
+            # Some call-sites pass `mask=None` to indicate "no spatial masking"
+            # (i.e. apply guidance everywhere). Treat that as an all-ones mask.
+            if mask is None:
+                if latent_height is None or latent_width is None:
+                    raise ValueError("mask=None requires latent_height/latent_width to be set")
+                mask = torch.ones((latent_height, latent_width), device=x0.device, dtype=x0.dtype)
             mask = mask.unsqueeze(0)
             mask = resize(mask, (latent_height, latent_width)).view(1, -1, 1)
             # mask *= 0.2
 
         if warp and warp_latent is not None:
+            if warp_mask is None:
+                if latent_height is None or latent_width is None:
+                    raise ValueError("warp_mask=None requires latent_height/latent_width to be set")
+                warp_mask = torch.ones((latent_height, latent_width), device=x0.device, dtype=x0.dtype)
             warp_mask = warp_mask.unsqueeze(0)
             warp_mask = resize(warp_mask, (latent_height, latent_width)).view(1, -1, 1)
             warp_latent = warp_latent * warp_mask + x0 * (1-warp_mask)
