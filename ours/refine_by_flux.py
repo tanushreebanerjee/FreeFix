@@ -126,7 +126,7 @@ def refine(cfg, build_masks_fn=None, post_step_fn=None, no_refine=False, mask_sc
             "image_id": f"gen_{i - cfg.refine_start_idx}",
         }]
 
-        refined_image.save(f'{output_dir}/refine/gen/image_{i:03d}.jpg')
+        refined_image.save(f'{output_dir}/refine/gen/image_{i:03d}.png')
         gen_writer.append_data(np.array(refined_image))
 
         if post_step_fn is not None:
