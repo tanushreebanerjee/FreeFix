@@ -42,6 +42,11 @@ def refine(cfg, build_masks_fn=None, post_step_fn=None, no_refine=False, mask_sc
 
     pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-dev", torch_dtype=torch.bfloat16)
     pipe = pipe.to("cuda")
+    pipe.enable_vae_tiling()
+    # Use 64-latent (512-pixel) tiles to keep per-tile peak memory low on high-res scenes
+    # (LLFF/MipNeRF360 images can be 3k×4k; the default 128-latent=1024-pixel tile OOMs).
+    pipe.vae.tile_latent_min_size = 64
+    pipe.vae.tile_sample_min_size = 512
     pipe.scheduler = FlowMatchEulerDiscreteScheduler.from_config(pipe.scheduler.config)
 
     output_dir = os.path.join(cfg.base_dir, cfg.exp_name)
@@ -112,6 +117,7 @@ def refine(cfg, build_masks_fn=None, post_step_fn=None, no_refine=False, mask_sc
         )
         if masks is not None:
             pipe_kwargs.update(mask=masks, mask_scheduler=mask_scheduler)
+        torch.cuda.empty_cache()
         refined_image = pipe(cfg.prompt, **pipe_kwargs).images[0]
 
         refined_image = refined_image.resize((W, H))
