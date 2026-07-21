@@ -1,0 +1,14 @@
+base_dir: outputs/mipnerf/kitchen_v2/paperx_k3
+exp_name: flux
+refine_start_idx: 0
+refine_end_idx: 23
+train_start_idx: 0
+train_end_idx: 3
+test_split: test
+test_trans: [ 0, 0, 0 ]
+test_rots: [ 0, 0, 0 ]
+prompt: "A yellow Lego bulldozer with black tracks sits on a wooden table. There are placemats underneath it."
+strength: 0.7
+refine_steps: 400
+hessian_attr: [ "means" ]
+data_type: colmap
